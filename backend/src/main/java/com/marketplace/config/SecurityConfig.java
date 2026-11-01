@@ -36,8 +36,8 @@ public class SecurityConfig {
 
     @Bean
     UserDetailsService userDetailsService(UserRepository repository) {
-        return email -> {
-            var user = repository.findByEmail(email.toLowerCase(Locale.ROOT))
+        return identifier -> {
+            var user = repository.findForLogin(identifier.strip().toLowerCase(Locale.ROOT))
                     .filter(record -> record.getPasswordHash() != null)
                     .orElseThrow(() -> new UsernameNotFoundException("Invalid credentials"));
             return User.withUsername(user.getEmail()).password(user.getPasswordHash()).roles("USER").build();

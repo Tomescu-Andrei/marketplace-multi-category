@@ -21,8 +21,13 @@ public class UserRepository {
         return dsl.selectFrom(USERS).where(lower(USERS.EMAIL).eq(email)).fetchOptional();
     }
 
-    public UsersRecord create(String email, String displayName, String passwordHash) {
-        return dsl.insertInto(USERS).set(USERS.EMAIL, email).set(USERS.DISPLAY_NAME, displayName)
+    public Optional<UsersRecord> findForLogin(String identifier) {
+        return identifier.contains("@") ? findByEmail(identifier)
+                : dsl.selectFrom(USERS).where(lower(USERS.USERNAME).eq(identifier)).fetchOptional();
+    }
+
+    public UsersRecord create(String username, String email, String displayName, String passwordHash) {
+        return dsl.insertInto(USERS).set(USERS.USERNAME, username).set(USERS.EMAIL, email).set(USERS.DISPLAY_NAME, displayName)
                 .set(USERS.PASSWORD_HASH, passwordHash).returning().fetchSingle();
     }
 }

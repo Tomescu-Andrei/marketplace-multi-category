@@ -24,6 +24,6 @@ public class CurrentUserService {
         }
         var user = repository.findByEmail(authentication.getName())
                 .orElseThrow(() -> new BadCredentialsException("Authentication required"));
-        return new UserResponse(user.getId(), user.getEmail(), user.getDisplayName(), user.getCreatedAt());
+        return new UserResponse(user.getId(), user.getUsername(), user.getEmail(), user.getDisplayName(), user.getCreatedAt());
     }
 }

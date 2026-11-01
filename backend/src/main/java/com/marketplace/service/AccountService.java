@@ -26,8 +26,8 @@ public class AccountService {
         if (request.password().getBytes(StandardCharsets.UTF_8).length > 72) {
             throw new InvalidRegistrationException("Password must contain at most 72 UTF-8 bytes");
         }
-        var user = repository.create(request.email().toLowerCase(Locale.ROOT), request.displayName().strip(),
+        var user = repository.create(request.username().toLowerCase(Locale.ROOT), request.email().toLowerCase(Locale.ROOT), request.displayName().strip(),
                 passwordEncoder.encode(request.password()));
-        return new UserResponse(user.getId(), user.getEmail(), user.getDisplayName(), user.getCreatedAt());
+        return new UserResponse(user.getId(), user.getUsername(), user.getEmail(), user.getDisplayName(), user.getCreatedAt());
     }
 }

@@ -68,3 +68,7 @@ M2's security filters also use this error shape. A missing CSRF token may produc
 403 before authentication or DTO validation. Unknown routes require authentication
 unless explicitly public, so anonymous calls can receive 401 before MVC routing.
 See [authentication](authentication.md) for registration and session rules.
+
+Registration requires a valid unique username as well as email. Login's identifier
+accepts either one, and invalid credentials use the same generic 401. A duplicate
+username or email returns 409 DATA_CONFLICT without disclosing which account exists.

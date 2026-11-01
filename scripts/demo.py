@@ -54,9 +54,9 @@ account = None
 if "/api/v1/auth/register" in api["paths"]:
     renew_csrf()
     credentials = {"email": f"demo-{time.time_ns()}@marketplace.test", "password": "DockerDemo-2026!"}
-    account = request("/api/v1/auth/register", "POST", {**credentials, "displayName": "Docker Demo"}, 201)
+    account = request("/api/v1/auth/register", "POST", {**credentials, "username": f"demo_{time.time_ns()}", "displayName": "Docker Demo"}, 201)
     old_session = next(cookie.value for cookie in cookies if cookie.name == "JSESSIONID")
-    request("/api/v1/auth/login", "POST", credentials)
+    request("/api/v1/auth/login", "POST", {"identifier": account["username"], "password": credentials["password"]})
     session_cookie = next(cookie for cookie in cookies if cookie.name == "JSESSIONID")
     assert session_cookie.value != old_session
     assert session_cookie.has_nonstandard_attr("HttpOnly")

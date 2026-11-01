@@ -7,9 +7,15 @@ PostgreSQL 17. PostgreSQL persists to a named volume, published only on localhos
 the backend is published on localhost:8081. Swagger is served by the backend.
 An optional IDE/native workflow remains available.
 
+The React authentication UI is served by a third Docker service at localhost:8082.
+Its Nginx runtime proxies `/api/` to the backend and serves SPA routes. Registration,
+login and account/logout use the same-origin session and automatic CSRF fetching.
+See [frontend](frontend.md) for routes and test coverage.
+
 ```mermaid
 flowchart LR
-    Client[Swagger UI or HTTP client] --> Security[Sessions and CSRF]
+    React[React UI and Nginx proxy] --> Security[Sessions and CSRF]
+    Client[Swagger UI or HTTP client] --> Security
     Security --> Controller[REST controllers and request validation]
     Controller --> Service[Services and transactions]
     Service --> Repository[Repositories using jOOQ DSLContext]

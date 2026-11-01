@@ -11,6 +11,11 @@ is reserved for the local seed. Applied migrations must not be edited.
 M2's V4 adds nullable users.password_hash and a lower(email) unique index. Existing
 M1 users cannot log in because their hash is null; new registration stores BCrypt.
 
+V5 adds a required unique lowercase username with a 3–32 character format check.
+Backfill preserves account IDs/emails/hashes and uses a safe unique display name
+where possible, otherwise user_<id>. Login can distinguish email from username
+unambiguously because usernames cannot contain @.
+
 Native builds use a temporary PostgreSQL container; Docker image builds supply an
 isolated PostgreSQL process inside the build stage. Both run shared Flyway migrations
 and generate jOOQ from the migrated schema. Finally blocks/shell traps stop temporary

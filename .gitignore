@@ -22,3 +22,8 @@ Thumbs.db
 
 # Disposable clean-clone verification copies
 .verification/
+
+# React / Vite
+**/node_modules/
+**/dist/
+**/coverage/

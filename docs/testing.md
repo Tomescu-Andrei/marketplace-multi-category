@@ -6,6 +6,7 @@ Requirements: Docker Desktop with Linux containers running. From the repository 
 
 ```powershell
 docker compose --profile tools run --build --rm verify
+docker compose --profile tools run --build --rm frontend-verify
 ```
 
 The Maven container migrates a temporary PostgreSQL instance, generates jOOQ sources,
@@ -35,6 +36,14 @@ No mocked repository replaces PostgreSQL in integration tests.
 Tests are in `MarketplaceApplicationTests` (real PostgreSQL) and
 `GlobalExceptionHandlerTests` (isolated MVC failure-path tests). Surefire reports
 are written to `backend/target/surefire-reports/` and are not committed.
+
+Frontend tests use Vitest/React Testing Library in the frontend-verify container.
+They cover the API client, session restoration, registration validation, login/logout,
+server errors and stale refresh behavior. See [frontend](frontend.md).
+
+For a manual UI check, open localhost:8082, register a test account, log in, reload
+the account page, then log out and try navigating directly to /cont again. Also check
+an incorrect password and a narrow mobile viewport. Test registrations persist locally.
 
 ## Manual M1 demonstration
 

@@ -50,19 +50,19 @@ public class AuthController {
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Register an account", description = "Creates an account without automatically logging in. Emails are stored in lowercase.")
+    @Operation(summary = "Register an account", description = "Creates an account without automatically logging in. Usernames and emails are unique and stored in lowercase.")
     public UserResponse register(@RequestBody @Valid RegisterRequest request) {
         return accounts.register(request);
     }
 
     @PostMapping("/login")
-    @Operation(summary = "Log in", description = "Sets an HttpOnly session cookie. The session ID and CSRF token rotate; fetch a new CSRF token after success.")
+    @Operation(summary = "Log in", description = "Accepts a username or email in identifier. Sets an HttpOnly session cookie. Fetch a new CSRF token after success.")
     public UserResponse login(@RequestBody @Valid LoginRequest login, HttpServletRequest request, HttpServletResponse response) {
         if (login.password().getBytes(StandardCharsets.UTF_8).length > 72) {
             throw new BadCredentialsException("Invalid credentials");
         }
         var authentication = authenticationManager.authenticate(UsernamePasswordAuthenticationToken.unauthenticated(
-                login.email().toLowerCase(Locale.ROOT), login.password()));
+                login.identifier().strip().toLowerCase(Locale.ROOT), login.password()));
         sessionStrategy.onAuthentication(authentication, request, response);
         var context = SecurityContextHolder.createEmptyContext();
         context.setAuthentication(authentication);

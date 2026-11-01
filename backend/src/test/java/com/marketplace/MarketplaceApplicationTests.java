@@ -104,7 +104,7 @@ class MarketplaceApplicationTests {
     @Test
     void migrationsRunOnCleanPostgresAndCanBeValidatedAgain() {
         flyway.validate();
-        assertThat(flyway.info().applied()).hasSize(4);
+        assertThat(flyway.info().applied()).hasSize(5);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
 
@@ -404,8 +404,9 @@ class MarketplaceApplicationTests {
         var token = objectMapper.readTree(csrfResult.getResponse().getContentAsString());
         String email = "seller-" + java.util.UUID.randomUUID() + "@example.com";
         String password = "A-long-password-2026!";
+        String username = "seller_" + java.util.UUID.randomUUID().toString().substring(0, 8);
         String registration = objectMapper.writeValueAsString(java.util.Map.of("email", email.toUpperCase(),
-                "password", password, "displayName", " New Seller "));
+                "username", username, "password", password, "displayName", " New Seller "));
         var register = mvc.perform(post("/api/v1/auth/register").session(session)
                         .header(token.get("headerName").asText(), token.get("token").asText())
                         .contentType(MediaType.APPLICATION_JSON).content(registration))
@@ -459,12 +460,13 @@ class MarketplaceApplicationTests {
     @WithAnonymousUser
     void duplicateEmailIsCaseInsensitiveAndPasswordsAreNotReturned() throws Exception {
         String email = "duplicate-" + java.util.UUID.randomUUID() + "@example.com";
+        String username = "duplicate_" + java.util.UUID.randomUUID().toString().substring(0, 8);
         var body = objectMapper.writeValueAsString(java.util.Map.of("email", email,
-                "password", "Another-long-password!", "displayName", "Seller"));
+                "username", username, "password", "Another-long-password!", "displayName", "Seller"));
         mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isCreated());
         mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON)
-                        .content(body.replace(email, email.toUpperCase())))
+                        .content(body.replace(email, email.toUpperCase()).replace(username, username + "x")))
                 .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
     }
 
@@ -483,6 +485,7 @@ class MarketplaceApplicationTests {
         if (scenario.equals("wrongPassword")) {
             email = "wrong-password-" + java.util.UUID.randomUUID() + "@example.com";
             var registration = objectMapper.writeValueAsString(java.util.Map.of("email", email,
+                    "username", "wrong_" + java.util.UUID.randomUUID().toString().substring(0, 8),
                     "password", "Correct-password-2026!", "displayName", "Seller"));
             mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(registration))
                     .andExpect(status().isCreated());
@@ -495,17 +498,19 @@ class MarketplaceApplicationTests {
 
     @ParameterizedTest
     @WithAnonymousUser
-    @ValueSource(strings = {"invalidEmail", "shortPassword", "unicodePassword", "blankName", "extraRole"})
+    @ValueSource(strings = {"invalidEmail", "shortPassword", "unicodePassword", "blankName", "extraRole", "invalidUsername", "missingUsername"})
     void invalidRegistrationDoesNotCreateAnAccount(String scenario) throws Exception {
         String email = "invalid-" + java.util.UUID.randomUUID() + "@example.com";
         var body = objectMapper.createObjectNode().put("email", email).put("password", "A-valid-password-2026!")
-                .put("displayName", "Seller");
+                .put("displayName", "Seller").put("username", "invalid_" + java.util.UUID.randomUUID().toString().substring(0, 8));
         switch (scenario) {
             case "invalidEmail" -> body.put("email", "not-an-email");
             case "shortPassword" -> body.put("password", "short");
             case "unicodePassword" -> body.put("password", "é".repeat(50));
             case "blankName" -> body.put("displayName", " ");
             case "extraRole" -> body.put("role", "ADMIN");
+            case "invalidUsername" -> body.put("username", "someone@example.com");
+            case "missingUsername" -> body.remove("username");
             default -> throw new IllegalArgumentException(scenario);
         }
         int count = dsl.fetchCount(USERS);
@@ -523,5 +528,47 @@ class MarketplaceApplicationTests {
                         .header(token.get("headerName").asText(), token.get("token").asText())
                         .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"user@example.com\",\"password\":\"password\"}"))
                 .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("INVALID_CSRF_TOKEN"));
+    }
+
+    @ParameterizedTest
+    @WithAnonymousUser
+    @ValueSource(strings = {"username", "email", "uppercaseUsername", "spacedUsername"})
+    void logsInWithUsernameOrEmail(String mode) throws Exception {
+        String username = "login_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        String email = username + "@example.test";
+        String password = "Username-password-2026!";
+        var registration = objectMapper.writeValueAsString(java.util.Map.of("username", username.toUpperCase(),
+                "email", email, "password", password, "displayName", "Username Test"));
+        mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(registration))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.username").value(username));
+        String identifier = switch (mode) {
+            case "email" -> email.toUpperCase();
+            case "uppercaseUsername" -> username.toUpperCase();
+            case "spacedUsername" -> "  " + username + "  ";
+            default -> username;
+        };
+        var login = objectMapper.writeValueAsString(java.util.Map.of("identifier", identifier, "password", password));
+        mvc.perform(post("/api/v1/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(login))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.username").value(username))
+                .andExpect(jsonPath("$.email").value(email)).andExpect(jsonPath("$.passwordHash").doesNotExist());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void usernameIsUniqueIgnoringCaseEvenForDifferentEmails() throws Exception {
+        String username = "unique_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        var registration = objectMapper.createObjectNode().put("username", username).put("email", username + "@example.test")
+                .put("password", "Username-password-2026!").put("displayName", "Seller");
+        mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(registration.toString()))
+                .andExpect(status().isCreated());
+        registration.put("username", username.toUpperCase()).put("email", username + "-other@example.test");
+        mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(registration.toString()))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+    }
+
+    @Test
+    void migrationAssignsUsernameToExistingM1Seller() {
+        assertThat(dsl.select(USERS.USERNAME).from(USERS).where(USERS.EMAIL.eq("seller@marketplace.test"))
+                .fetchSingle(USERS.USERNAME)).isEqualTo("user_1");
     }
 }
