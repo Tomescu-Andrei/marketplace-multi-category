@@ -7,8 +7,8 @@ Multi-category marketplace developed for the Research Industry Projects course.
 Java 21, Spring Boot, Maven, Spring Web, Validation, Flyway, jOOQ and PostgreSQL.
 The database runs locally in Docker; the backend runs on the host machine.
 
-The category and listing APIs are implemented. Swagger and the remaining M1
-documentation will be added next. No frontend is implemented.
+The category/listing APIs, validation, consistent errors and Swagger UI are implemented.
+M1 architecture and research proposal are documented. No frontend is implemented.
 
 ## Run locally
 
@@ -84,7 +84,8 @@ Maven adds this folder to compilation automatically. Generate alone with
 
 API integration tests use another isolated PostgreSQL container. They verify
 migrations, category retrieval, listing creation and retrieval, pagination,
-and invalid requests. Builds and tests do not change the development database.
+invalid requests, error contracts and Swagger. Builds and tests do not change the
+development database. See [testing and demo](docs/testing.md) for coverage and troubleshooting.
 
 In IntelliJ, import `backend/pom.xml`, select JDK 21, run `mvn generate-sources`
 with Docker running, then reload the Maven project if generated types are unresolved.
@@ -101,7 +102,8 @@ with Docker running, then reload the Maven project if generated types are unreso
 
 Listing pagination accepts a limit from 1 to 100 and a nonnegative offset.
 Missing resources return 404. Invalid input returns 400 using Problem Detail JSON.
-An unknown category during creation returns 404.
+An unknown category during creation returns 404. Errors include a stable `code`
+and an `errors` array of field/message pairs; see [API errors](docs/api-errors.md).
 
 Example in PowerShell (change the port if using `SERVER_PORT`):
 
@@ -128,6 +130,23 @@ The seller is supplied by the local server configuration, not by the request.
 lifecycle are deferred to M3. Both types require a supported uppercase ISO currency.
 Category attribute codes, required values and JSON types are validated by the service.
 
-See [database design](docs/database-design.md) for schema decisions and limitations.
+## Swagger UI
+
+With the backend running, open [Swagger UI](http://localhost:8080/swagger-ui.html).
+Use **Try it out** on each operation; POST listings includes a working example.
+Adjust the URL if using a different `SERVER_PORT`. No authentication is required
+for the M1 local seller.
+
+OpenAPI JSON: [API definition](http://localhost:8080/v3/api-docs).
+YAML is also available at `/v3/api-docs.yaml`.
+
+## Documentation
+
+- [Architecture](docs/architecture.md): layers, request flow and future cloud architecture.
+- [Database design](docs/database-design.md): schema decisions and JSONB trade-offs.
+- [API errors](docs/api-errors.md): validation rules and error contract.
+- [Testing and demo](docs/testing.md): verification, manual demonstration and troubleshooting.
+- [Research proposal](docs/research-proposal.md): dataset requirements, experiments,
+  MAE/RMSE/R² evaluation and planned Java model integration. No experiments have run yet.
 
 See [AGENTS.md](AGENTS.md) for the architecture and milestone requirements.

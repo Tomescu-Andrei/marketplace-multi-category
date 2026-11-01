@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.flywaydb.core.Flyway;
 import org.jooq.DSLContext;
@@ -14,14 +15,17 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.ActiveProfiles;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
+import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static com.marketplace.jooq.Tables.LISTINGS;
@@ -29,6 +33,7 @@ import static com.marketplace.jooq.Tables.LISTINGS;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @AutoConfigureMockMvc
+@ActiveProfiles("local")
 class MarketplaceApplicationTests {
 
     @Container
@@ -141,7 +146,10 @@ class MarketplaceApplicationTests {
     @ValueSource(strings = {"/api/v1/listings?limit=101", "/api/v1/listings?limit=0",
             "/api/v1/listings?offset=-1", "/api/v1/listings/0", "/api/v1/categories/-1"})
     void invalidParametersReturn400(String path) throws Exception {
-        mvc.perform(get(path)).andExpect(status().isBadRequest());
+        mvc.perform(get(path)).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_PARAMETER"))
+                .andExpect(jsonPath("$.errors[0].field").isNotEmpty())
+                .andExpect(jsonPath("$.instance").value(path.split("\\?")[0]));
     }
 
     @ParameterizedTest
@@ -183,5 +191,184 @@ class MarketplaceApplicationTests {
                         .content(VALID_LISTING.replace("\"categoryId\":1", "\"categoryId\":999999")))
                 .andExpect(status().isNotFound());
         assertThat(dsl.fetchCount(LISTINGS)).isZero();
+    }
+
+    @Test
+    void validationErrorsIdentifyFieldsWithoutExposingRejectedValues() throws Exception {
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.type").value("about:blank"))
+                .andExpect(jsonPath("$.title").value("Bad Request"))
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.instance").value("/api/v1/listings"))
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.errors[0].field").value("categoryId"))
+                .andExpect(jsonPath("$.errors[0].message").isNotEmpty())
+                .andExpect(jsonPath("$.trace").doesNotExist());
+    }
+
+    @Test
+    void businessErrorsIdentifyTheAttribute() throws Exception {
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_LISTING.replace("\"year\":2022", "\"year\":\"2022\"")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_LISTING"))
+                .andExpect(jsonPath("$.errors[0].field").value("attributes.year"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"fractionalId", "numericEnum", "unknownField", "trailingJson", "duplicateKey"})
+    void ambiguousJsonIsRejected(String scenario) throws Exception {
+        String body = switch (scenario) {
+            case "fractionalId" -> VALID_LISTING.replace("\"categoryId\":1", "\"categoryId\":1.5");
+            case "numericEnum" -> VALID_LISTING.replace("\"FIXED_PRICE\"", "0");
+            case "unknownField" -> VALID_LISTING.replace("\"categoryId\":1", "\"sellerId\":123,\"categoryId\":1");
+            case "trailingJson" -> VALID_LISTING + "{}";
+            case "duplicateKey" -> VALID_LISTING.replace("\"categoryId\":1", "\"categoryId\":2,\"categoryId\":1");
+            default -> throw new IllegalArgumentException(scenario);
+        };
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_JSON"))
+                .andExpect(jsonPath("$.errors").isArray());
+        assertThat(dsl.fetchCount(LISTINGS)).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/v1/categories/abc", "/api/v1/listings?limit=abc"})
+    void invalidParameterTypesHaveConsistentErrors(String path) throws Exception {
+        mvc.perform(get(path)).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_PARAMETER"))
+                .andExpect(jsonPath("$.errors[0].message").isNotEmpty());
+    }
+
+    @Test
+    void unsupportedMethodsAndContentTypesKeepHttpSemantics() throws Exception {
+        mvc.perform(put("/api/v1/listings/1"))
+                .andExpect(status().isMethodNotAllowed()).andExpect(header().exists("Allow"))
+                .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"))
+                .andExpect(jsonPath("$.errors").isArray());
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.TEXT_PLAIN).content(VALID_LISTING))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"));
+        mvc.perform(get("/api/v1/missing"))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("NOT_FOUND"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"nullBrand", "nestedBrand", "textBoolean", "longTitle", "longDescription",
+            "longBrand", "priceOverflow", "tooManyAttributes"})
+    void rejectsBoundaryAndAttributeViolations(String scenario) throws Exception {
+        var body = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(VALID_LISTING);
+        var attributes = (com.fasterxml.jackson.databind.node.ObjectNode) body.get("attributes");
+        switch (scenario) {
+            case "nullBrand" -> attributes.putNull("brand");
+            case "nestedBrand" -> attributes.putObject("brand").put("name", "Lenovo");
+            case "textBoolean" -> attributes.put("original_packaging", "false");
+            case "longTitle" -> body.put("title", "x".repeat(201));
+            case "longDescription" -> body.put("description", "x".repeat(10001));
+            case "longBrand" -> attributes.put("brand", "x".repeat(1001));
+            case "priceOverflow" -> body.put("price", new BigDecimal("1000000000000.00"));
+            case "tooManyAttributes" -> {
+                for (int index = 0; index < 101; index++) { attributes.put("extra_" + index, true); }
+            }
+            default -> throw new IllegalArgumentException(scenario);
+        }
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errors[0].field").isNotEmpty());
+        assertThat(dsl.fetchCount(LISTINGS)).isZero();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"0.01", "999999999999.99"})
+    void acceptsMoneyBoundariesWithoutPrecisionLoss(String price) throws Exception {
+        var body = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(VALID_LISTING);
+        body.put("price", new BigDecimal(price));
+        var response = mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+                .andExpect(status().isCreated()).andReturn().getResponse();
+        long id = objectMapper.readTree(response.getContentAsString()).get("id").longValue();
+        assertThat(dsl.select(LISTINGS.PRICE).from(LISTINGS).where(LISTINGS.ID.eq(id)).fetchSingle(LISTINGS.PRICE))
+                .isEqualByComparingTo(price);
+    }
+
+    @Test
+    void categorySpecificDefinitionsAndOptionalAttributesAreRespected() throws Exception {
+        String book = """
+                {"categoryId":2,"title":"Book","description":"Used book","listingType":"FIXED_PRICE",
+                 "price":15,"currency":"EUR","attributes":{"author":"Test author"}}
+                """;
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(book))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.attributes.author").value("Test author"));
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON)
+                        .content(book.replace("\"author\":\"Test author\"", "\"brand\":\"Lenovo\"")))
+                .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_LISTING"));
+        var electronics = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(VALID_LISTING);
+        var attributes = (com.fasterxml.jackson.databind.node.ObjectNode) electronics.get("attributes");
+        attributes.remove("year");
+        attributes.putNull("original_packaging");
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(electronics.toString()))
+                .andExpect(status().isCreated());
+        assertThat(dsl.fetchCount(LISTINGS)).isEqualTo(2);
+    }
+
+    @Test
+    void paginationIsStableWhenCreationTimestampsMatch() throws Exception {
+        for (int index = 0; index < 3; index++) {
+            mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON)
+                    .content(VALID_LISTING.replace("Used laptop", "Laptop " + index))).andExpect(status().isCreated());
+        }
+        dsl.update(LISTINGS).set(LISTINGS.CREATED_AT, java.time.OffsetDateTime.parse("2026-11-01T00:00:00Z")).execute();
+        mvc.perform(get("/api/v1/listings?limit=2&offset=0"))
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].title").value("Laptop 2"))
+                .andExpect(jsonPath("$[1].title").value("Laptop 1"));
+        mvc.perform(get("/api/v1/listings?limit=2&offset=2"))
+                .andExpect(jsonPath("$.length()").value(1)).andExpect(jsonPath("$[0].title").value("Laptop 0"));
+    }
+
+    @ParameterizedTest
+    @CsvSource(value = {"null|1|23514", "-1|1|23514", "10|999999|23503"}, delimiter = '|', nullValues = "null")
+    void databaseEnforcesPriceAndSellerConstraints(String price, long sellerId, String sqlState) throws SQLException {
+        try (var connection = dataSource.getConnection(); var statement = connection.prepareStatement("""
+                INSERT INTO listings (seller_id, category_id, title, description, listing_type, price, currency)
+                VALUES (?, 1, 'Constraint test', 'Test', 'FIXED_PRICE', ?, 'RON')
+                """)) {
+            statement.setLong(1, sellerId);
+            statement.setBigDecimal(2, price == null ? null : new BigDecimal(price));
+            assertThatExceptionOfType(SQLException.class).isThrownBy(statement::executeUpdate)
+                    .satisfies(exception -> assertThat(exception.getSQLState()).isEqualTo(sqlState));
+        }
+        assertThat(dsl.fetchCount(LISTINGS)).isZero();
+    }
+
+    @Test
+    void openApiDescribesAllOperationsAndCreationExample() throws Exception {
+        var response = mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        var api = objectMapper.readTree(response);
+        assertThat(api.at("/info/title").asText()).isEqualTo("Multi-Category Marketplace API");
+        assertThat(api.get("paths").size()).isEqualTo(4);
+        var paths = api.get("paths");
+        assertThat(paths.get("/api/v1/categories").has("get")).isTrue();
+        assertThat(paths.get("/api/v1/categories/{id}").has("get")).isTrue();
+        assertThat(paths.get("/api/v1/listings/{id}").has("get")).isTrue();
+        assertThat(paths.get("/api/v1/listings").has("get")).isTrue();
+        var create = paths.get("/api/v1/listings").get("post");
+        assertThat(create.at("/responses/201/headers/Location").isMissingNode()).isFalse();
+        assertThat(create.at("/responses/400/$ref").asText()).isEqualTo("#/components/responses/BadRequest");
+        assertThat(create.at("/responses/404/$ref").asText()).isEqualTo("#/components/responses/NotFound");
+        assertThat(create.at("/requestBody/content/application~1json/examples").isEmpty()).isFalse();
+        assertThat(api.at("/components/schemas/ApiProblem/properties/errors/type").asText()).isEqualTo("array");
+    }
+
+    @Test
+    void swaggerUiAndItsAssetsAreServed() throws Exception {
+        mvc.perform(get("/swagger-ui.html")).andExpect(status().is3xxRedirection())
+                .andExpect(header().string("Location", "/swagger-ui/index.html"));
+        mvc.perform(get("/swagger-ui/index.html")).andExpect(status().isOk())
+                .andExpect(content().string(org.hamcrest.Matchers.containsString("swagger-ui")));
+        mvc.perform(get("/swagger-ui/swagger-ui-bundle.js")).andExpect(status().isOk());
+        mvc.perform(get("/v3/api-docs/swagger-config")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.url").value("/v3/api-docs"));
     }
 }

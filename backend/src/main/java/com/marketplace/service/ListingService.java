@@ -43,26 +43,26 @@ public class ListingService {
     @Transactional
     public ListingResponse create(CreateListingRequest request) {
         if (request.listingType() == ListingType.FIXED_PRICE && request.price() == null) {
-            throw new InvalidListingException("A fixed-price listing requires a price");
+            throw new InvalidListingException("price", "A fixed-price listing requires a price");
         }
         try {
             Currency.getInstance(request.currency());
         } catch (IllegalArgumentException exception) {
-            throw new InvalidListingException("Currency must be a supported ISO 4217 code");
+            throw new InvalidListingException("currency", "Currency must be a supported ISO 4217 code");
         }
         var category = categoryService.findById(request.categoryId());
         Map<String, JsonNode> attributes = request.attributes() == null ? Map.of() : request.attributes();
         Set<String> allowedCodes = category.attributes().stream().map(attribute -> attribute.code()).collect(Collectors.toSet());
         for (String code : attributes.keySet()) {
             if (!allowedCodes.contains(code)) {
-                throw new InvalidListingException("Unknown category attribute: " + code);
+                throw new InvalidListingException("attributes." + code, "Unknown category attribute: " + code);
             }
         }
         for (var definition : category.attributes()) {
             var value = attributes.get(definition.code());
             if (value == null || value.isNull()) {
                 if (definition.required()) {
-                    throw new InvalidListingException("Required attribute is missing: " + definition.code());
+                    throw new InvalidListingException("attributes." + definition.code(), "Required attribute is missing: " + definition.code());
                 }
                 continue;
             }
@@ -73,7 +73,7 @@ public class ListingService {
                 default -> false;
             };
             if (!valid) {
-                throw new InvalidListingException("Invalid value for " + definition.code() + "; expected " + definition.dataType());
+                throw new InvalidListingException("attributes." + definition.code(), "Invalid value for " + definition.code() + "; expected " + definition.dataType());
             }
         }
         if (!repository.sellerExists(testSellerId)) {
