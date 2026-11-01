@@ -1,3 +1,9 @@
 spring:
   application:
     name: marketplace-backend
+  profiles:
+    default: local
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:15432/marketplace}
+    username: ${DB_USERNAME:marketplace}
+    password: ${DB_PASSWORD:marketplace_local}

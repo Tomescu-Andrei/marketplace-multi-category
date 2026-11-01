@@ -1,0 +1,5 @@
+marketplace:
+  test-seller-id: 1
+spring:
+  flyway:
+    locations: classpath:db/migration,classpath:db/local
