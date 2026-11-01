@@ -7,7 +7,6 @@ import com.marketplace.dto.ListingType;
 import com.marketplace.exception.InvalidListingException;
 import com.marketplace.exception.ResourceNotFoundException;
 import com.marketplace.repository.ListingRepository;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,13 +21,13 @@ import java.util.stream.Collectors;
 public class ListingService {
     private final ListingRepository repository;
     private final CategoryService categoryService;
-    private final long testSellerId;
+    private final CurrentUserService currentUser;
 
     public ListingService(ListingRepository repository, CategoryService categoryService,
-                          @Value("${marketplace.test-seller-id:1}") long testSellerId) {
+                          CurrentUserService currentUser) {
         this.repository = repository;
         this.categoryService = categoryService;
-        this.testSellerId = testSellerId;
+        this.currentUser = currentUser;
     }
 
     public List<ListingResponse> findAll(int limit, int offset) {
@@ -76,9 +75,6 @@ public class ListingService {
                 throw new InvalidListingException("attributes." + definition.code(), "Invalid value for " + definition.code() + "; expected " + definition.dataType());
             }
         }
-        if (!repository.sellerExists(testSellerId)) {
-            throw new IllegalStateException("The M1 test seller is not configured");
-        }
-        return repository.create(request, testSellerId, attributes);
+        return repository.create(request, currentUser.requireUser().id(), attributes);
     }
 }

@@ -22,7 +22,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/listings")
-@Tag(name = "Listings", description = "Create and retrieve listings using the M1 test seller")
+@Tag(name = "Listings", description = "Public listing retrieval and creation by the authenticated seller")
 public class ListingController {
     private final ListingService service;
 
@@ -44,7 +44,7 @@ public class ListingController {
     }
 
     @PostMapping
-    @Operation(summary = "Create a listing", description = "The server supplies the predefined seller. FIXED_PRICE requires a positive price. "
+    @Operation(summary = "Create a listing", description = "The authenticated user is the seller. FIXED_PRICE requires a positive price. "
             + "AUCTION accepts a null price and stores metadata only. Attribute codes and JSON scalar types must match the category definitions.")
     @ApiResponse(responseCode = "201", description = "Listing created",
             headers = @Header(name = "Location", description = "Relative URL of the created listing", schema = @Schema(type = "string")),

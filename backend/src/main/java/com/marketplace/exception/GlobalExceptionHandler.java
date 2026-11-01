@@ -5,6 +5,7 @@ import org.springframework.beans.TypeMismatchException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.*;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -20,6 +21,17 @@ import java.util.List;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+    @ExceptionHandler(AuthenticationException.class)
+    ResponseEntity<Object> authenticationFailure(AuthenticationException exception, WebRequest request) {
+        return respond(exception, HttpStatus.UNAUTHORIZED, "UNAUTHENTICATED", "Invalid credentials or authentication required", List.of(), request);
+    }
+
+    @ExceptionHandler(InvalidRegistrationException.class)
+    ResponseEntity<Object> invalidRegistration(InvalidRegistrationException exception, WebRequest request) {
+        return respond(exception, HttpStatus.BAD_REQUEST, "VALIDATION_FAILED", exception.getMessage(),
+                List.of(new ValidationError("password", exception.getMessage())), request);
+    }
 
     @ExceptionHandler(ResourceNotFoundException.class)
     ResponseEntity<Object> notFound(ResourceNotFoundException exception, WebRequest request) {

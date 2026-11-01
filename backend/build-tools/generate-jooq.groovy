@@ -7,12 +7,23 @@ import org.jooq.meta.jaxb.Jdbc
 import org.jooq.meta.jaxb.Target
 import org.testcontainers.containers.PostgreSQLContainer
 
-// Generate against the actual PostgreSQL schema without touching the development database.
-def postgres = new PostgreSQLContainer('postgres:17-alpine')
+// Native Maven builds use Testcontainers. Docker image builds supply their own temporary database.
+def postgres = null
 try {
-    postgres.start()
+    def jdbcUrl = System.getenv('CODEGEN_DB_URL')
+    def username = System.getenv('CODEGEN_DB_USERNAME')
+    def password = System.getenv('CODEGEN_DB_PASSWORD')
+    if (!jdbcUrl) {
+        postgres = new PostgreSQLContainer('postgres:17-alpine')
+        postgres.start()
+        jdbcUrl = postgres.jdbcUrl
+        username = postgres.username
+        password = postgres.password
+    } else if (!username || password == null) {
+        throw new IllegalArgumentException('CODEGEN_DB_USERNAME and CODEGEN_DB_PASSWORD are required with CODEGEN_DB_URL')
+    }
     Flyway.configure()
-            .dataSource(postgres.jdbcUrl, postgres.username, postgres.password)
+            .dataSource(jdbcUrl, username, password)
             .locations('filesystem:' + new File(project.basedir, 'src/main/resources/db/migration').absolutePath)
             .load()
             .migrate()
@@ -20,9 +31,9 @@ try {
     GenerationTool.generate(new Configuration()
             .withJdbc(new Jdbc()
                     .withDriver('org.postgresql.Driver')
-                    .withUrl(postgres.jdbcUrl)
-                    .withUser(postgres.username)
-                    .withPassword(postgres.password))
+                    .withUrl(jdbcUrl)
+                    .withUser(username)
+                    .withPassword(password))
             .withGenerator(new Generator()
                     .withDatabase(new Database()
                             .withName('org.jooq.meta.postgres.PostgresDatabase')
@@ -32,5 +43,5 @@ try {
                             .withPackageName('com.marketplace.jooq')
                             .withDirectory(new File(project.build.directory, 'generated-sources/jooq').absolutePath))))
 } finally {
-    postgres.stop()
+    postgres?.stop()
 }

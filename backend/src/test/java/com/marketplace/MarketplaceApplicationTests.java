@@ -16,6 +16,10 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.security.test.context.support.WithAnonymousUser;
+import org.springframework.mock.web.MockHttpSession;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -29,11 +33,14 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static com.marketplace.jooq.Tables.LISTINGS;
+import static com.marketplace.jooq.Tables.USERS;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
 @AutoConfigureMockMvc
 @ActiveProfiles("local")
+@WithMockUser(username = "seller@marketplace.test")
 class MarketplaceApplicationTests {
 
     @Container
@@ -62,6 +69,9 @@ class MarketplaceApplicationTests {
     @Autowired
     private Flyway flyway;
 
+    @Autowired
+    private PasswordEncoder passwordEncoder;
+
     @BeforeEach
     void clearListings() {
         dsl.deleteFrom(LISTINGS).execute();
@@ -72,6 +82,13 @@ class MarketplaceApplicationTests {
              "listingType":"FIXED_PRICE","price":1250.50,"currency":"RON",
              "attributes":{"brand":"Lenovo","year":2022,"original_packaging":false}}
             """;
+
+    @Test
+    void healthChecksDatabaseWithoutExposingDetails() throws Exception {
+        mvc.perform(get("/actuator/health")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"))
+                .andExpect(jsonPath("$.components").doesNotExist());
+    }
 
     @Test
     void applicationConnectsToPostgres() throws SQLException {
@@ -87,7 +104,7 @@ class MarketplaceApplicationTests {
     @Test
     void migrationsRunOnCleanPostgresAndCanBeValidatedAgain() {
         flyway.validate();
-        assertThat(flyway.info().applied()).hasSize(3);
+        assertThat(flyway.info().applied()).hasSize(4);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
     }
 
@@ -104,7 +121,7 @@ class MarketplaceApplicationTests {
 
     @Test
     void createsPersistsAndRetrievesListing() throws Exception {
-        var response = mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(VALID_LISTING))
+        var response = mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(VALID_LISTING))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.sellerId").value(1))
                 .andExpect(jsonPath("$.status").value("ACTIVE"))
@@ -129,7 +146,7 @@ class MarketplaceApplicationTests {
     @Test
     void auctionMetadataAllowsNoPriceWithoutImplementingBidding() throws Exception {
         var body = VALID_LISTING.replace("FIXED_PRICE", "AUCTION").replace("1250.50", "null");
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.listingType").value("AUCTION"))
                 .andExpect(jsonPath("$.price").doesNotExist());
     }
@@ -155,7 +172,7 @@ class MarketplaceApplicationTests {
     @ParameterizedTest
     @ValueSource(strings = {"{}", "{", "{\"listingType\":\"INVALID\"}"})
     void malformedOrIncompleteRequestsReturn400(String body) throws Exception {
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest());
         assertThat(dsl.fetchCount(LISTINGS)).isZero();
     }
@@ -179,7 +196,7 @@ class MarketplaceApplicationTests {
             case "blankBrand" -> attributes.put("brand", " ");
             default -> throw new IllegalArgumentException(scenario);
         }
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_PROBLEM_JSON));
         assertThat(dsl.fetchCount(LISTINGS)).isZero();
@@ -187,7 +204,7 @@ class MarketplaceApplicationTests {
 
     @Test
     void unknownCategoryDoesNotCreateListing() throws Exception {
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_LISTING.replace("\"categoryId\":1", "\"categoryId\":999999")))
                 .andExpect(status().isNotFound());
         assertThat(dsl.fetchCount(LISTINGS)).isZero();
@@ -195,7 +212,7 @@ class MarketplaceApplicationTests {
 
     @Test
     void validationErrorsIdentifyFieldsWithoutExposingRejectedValues() throws Exception {
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content("{}"))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.type").value("about:blank"))
                 .andExpect(jsonPath("$.title").value("Bad Request"))
@@ -209,7 +226,7 @@ class MarketplaceApplicationTests {
 
     @Test
     void businessErrorsIdentifyTheAttribute() throws Exception {
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_LISTING.replace("\"year\":2022", "\"year\":\"2022\"")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_LISTING"))
@@ -227,7 +244,7 @@ class MarketplaceApplicationTests {
             case "duplicateKey" -> VALID_LISTING.replace("\"categoryId\":1", "\"categoryId\":2,\"categoryId\":1");
             default -> throw new IllegalArgumentException(scenario);
         };
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_JSON"))
                 .andExpect(jsonPath("$.errors").isArray());
@@ -244,11 +261,11 @@ class MarketplaceApplicationTests {
 
     @Test
     void unsupportedMethodsAndContentTypesKeepHttpSemantics() throws Exception {
-        mvc.perform(put("/api/v1/listings/1"))
+        mvc.perform(put("/api/v1/listings/1").with(csrf()))
                 .andExpect(status().isMethodNotAllowed()).andExpect(header().exists("Allow"))
                 .andExpect(jsonPath("$.code").value("METHOD_NOT_ALLOWED"))
                 .andExpect(jsonPath("$.errors").isArray());
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.TEXT_PLAIN).content(VALID_LISTING))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.TEXT_PLAIN).content(VALID_LISTING))
                 .andExpect(status().isUnsupportedMediaType())
                 .andExpect(jsonPath("$.code").value("UNSUPPORTED_MEDIA_TYPE"));
         mvc.perform(get("/api/v1/missing"))
@@ -274,7 +291,7 @@ class MarketplaceApplicationTests {
             }
             default -> throw new IllegalArgumentException(scenario);
         }
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errors[0].field").isNotEmpty());
         assertThat(dsl.fetchCount(LISTINGS)).isZero();
     }
@@ -284,7 +301,7 @@ class MarketplaceApplicationTests {
     void acceptsMoneyBoundariesWithoutPrecisionLoss(String price) throws Exception {
         var body = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(VALID_LISTING);
         body.put("price", new BigDecimal(price));
-        var response = mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+        var response = mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
                 .andExpect(status().isCreated()).andReturn().getResponse();
         long id = objectMapper.readTree(response.getContentAsString()).get("id").longValue();
         assertThat(dsl.select(LISTINGS.PRICE).from(LISTINGS).where(LISTINGS.ID.eq(id)).fetchSingle(LISTINGS.PRICE))
@@ -297,16 +314,16 @@ class MarketplaceApplicationTests {
                 {"categoryId":2,"title":"Book","description":"Used book","listingType":"FIXED_PRICE",
                  "price":15,"currency":"EUR","attributes":{"author":"Test author"}}
                 """;
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(book))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(book))
                 .andExpect(status().isCreated()).andExpect(jsonPath("$.attributes.author").value("Test author"));
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON)
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                         .content(book.replace("\"author\":\"Test author\"", "\"brand\":\"Lenovo\"")))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.code").value("INVALID_LISTING"));
         var electronics = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(VALID_LISTING);
         var attributes = (com.fasterxml.jackson.databind.node.ObjectNode) electronics.get("attributes");
         attributes.remove("year");
         attributes.putNull("original_packaging");
-        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(electronics.toString()))
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(electronics.toString()))
                 .andExpect(status().isCreated());
         assertThat(dsl.fetchCount(LISTINGS)).isEqualTo(2);
     }
@@ -314,7 +331,7 @@ class MarketplaceApplicationTests {
     @Test
     void paginationIsStableWhenCreationTimestampsMatch() throws Exception {
         for (int index = 0; index < 3; index++) {
-            mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON)
+            mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON)
                     .content(VALID_LISTING.replace("Used laptop", "Laptop " + index))).andExpect(status().isCreated());
         }
         dsl.update(LISTINGS).set(LISTINGS.CREATED_AT, java.time.OffsetDateTime.parse("2026-11-01T00:00:00Z")).execute();
@@ -347,7 +364,7 @@ class MarketplaceApplicationTests {
                 .andReturn().getResponse().getContentAsString();
         var api = objectMapper.readTree(response);
         assertThat(api.at("/info/title").asText()).isEqualTo("Multi-Category Marketplace API");
-        assertThat(api.get("paths").size()).isEqualTo(4);
+        assertThat(api.get("paths").size()).isEqualTo(9);
         var paths = api.get("paths");
         assertThat(paths.get("/api/v1/categories").has("get")).isTrue();
         assertThat(paths.get("/api/v1/categories/{id}").has("get")).isTrue();
@@ -359,6 +376,10 @@ class MarketplaceApplicationTests {
         assertThat(create.at("/responses/404/$ref").asText()).isEqualTo("#/components/responses/NotFound");
         assertThat(create.at("/requestBody/content/application~1json/examples").isEmpty()).isFalse();
         assertThat(api.at("/components/schemas/ApiProblem/properties/errors/type").asText()).isEqualTo("array");
+        assertThat(api.at("/components/responses/InternalError/content/application~1problem+json/example/status").asInt()).isEqualTo(500);
+        assertThat(paths.get("/api/v1/auth/register").at("/post/responses/201").isMissingNode()).isFalse();
+        assertThat(paths.get("/api/v1/auth/logout").at("/post/responses/204").isMissingNode()).isFalse();
+        assertThat(paths.get("/api/v1/auth/me").at("/get/responses/401/$ref").asText()).isEqualTo("#/components/responses/Unauthorized");
     }
 
     @Test
@@ -370,5 +391,137 @@ class MarketplaceApplicationTests {
         mvc.perform(get("/swagger-ui/swagger-ui-bundle.js")).andExpect(status().isOk());
         mvc.perform(get("/v3/api-docs/swagger-config")).andExpect(status().isOk())
                 .andExpect(jsonPath("$.url").value("/v3/api-docs"));
+    }
+
+    @Test
+    @WithAnonymousUser
+    void registrationLoginOwnershipAndLogoutWorkWithRealCsrfTokens() throws Exception {
+        // This flow exercises the real saved session, not the class-level mock security context.
+        org.springframework.security.test.context.TestSecurityContextHolder.clearContext();
+        var csrfResult = mvc.perform(get("/api/v1/auth/csrf")).andExpect(status().isOk()).andReturn();
+        var session = (MockHttpSession) csrfResult.getRequest().getSession(false);
+        String previousSessionId = session.getId();
+        var token = objectMapper.readTree(csrfResult.getResponse().getContentAsString());
+        String email = "seller-" + java.util.UUID.randomUUID() + "@example.com";
+        String password = "A-long-password-2026!";
+        String registration = objectMapper.writeValueAsString(java.util.Map.of("email", email.toUpperCase(),
+                "password", password, "displayName", " New Seller "));
+        var register = mvc.perform(post("/api/v1/auth/register").session(session)
+                        .header(token.get("headerName").asText(), token.get("token").asText())
+                        .contentType(MediaType.APPLICATION_JSON).content(registration))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.email").value(email))
+                .andExpect(jsonPath("$.displayName").value("New Seller"))
+                .andExpect(jsonPath("$.password").doesNotExist()).andExpect(jsonPath("$.passwordHash").doesNotExist())
+                .andReturn();
+        long userId = objectMapper.readTree(register.getResponse().getContentAsString()).get("id").longValue();
+        String hash = dsl.select(USERS.PASSWORD_HASH).from(USERS).where(USERS.ID.eq(userId)).fetchSingle(USERS.PASSWORD_HASH);
+        assertThat(hash).isNotEqualTo(password).startsWith("$2a$12$");
+        assertThat(passwordEncoder.matches(password, hash)).isTrue();
+        String login = objectMapper.writeValueAsString(java.util.Map.of("email", email, "password", password));
+        mvc.perform(post("/api/v1/auth/login").session(session)
+                        .header(token.get("headerName").asText(), token.get("token").asText())
+                        .contentType(MediaType.APPLICATION_JSON).content(login))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(userId));
+        assertThat(session.getId()).isNotEqualTo(previousSessionId);
+        mvc.perform(get("/api/v1/auth/me").session(session))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.id").value(userId));
+        var listingRequest = post("/api/v1/listings").session(session).contentType(MediaType.APPLICATION_JSON).content(VALID_LISTING);
+        mvc.perform(listingRequest.header(token.get("headerName").asText(), token.get("token").asText()))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("INVALID_CSRF_TOKEN"));
+        var renewed = mvc.perform(get("/api/v1/auth/csrf").session(session)).andExpect(status().isOk()).andReturn();
+        token = objectMapper.readTree(renewed.getResponse().getContentAsString());
+        mvc.perform(post("/api/v1/listings").session(session)
+                        .header(token.get("headerName").asText(), token.get("token").asText())
+                        .contentType(MediaType.APPLICATION_JSON).content(VALID_LISTING))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.sellerId").value(userId));
+        mvc.perform(post("/api/v1/auth/logout").session(session)
+                        .header(token.get("headerName").asText(), token.get("token").asText()))
+                .andExpect(status().isNoContent());
+        assertThat(session.isInvalid()).isTrue();
+        mvc.perform(get("/api/v1/auth/me")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithAnonymousUser
+    void publicReadsRemainAvailableButCreationRequiresAuthenticationAndCsrf() throws Exception {
+        mvc.perform(get("/api/v1/categories")).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/listings")).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/auth/me")).andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
+        mvc.perform(post("/api/v1/listings").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(VALID_LISTING))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/api/v1/listings").contentType(MediaType.APPLICATION_JSON).content(VALID_LISTING))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("INVALID_CSRF_TOKEN"));
+        assertThat(dsl.fetchCount(LISTINGS)).isZero();
+    }
+
+    @Test
+    @WithAnonymousUser
+    void duplicateEmailIsCaseInsensitiveAndPasswordsAreNotReturned() throws Exception {
+        String email = "duplicate-" + java.util.UUID.randomUUID() + "@example.com";
+        var body = objectMapper.writeValueAsString(java.util.Map.of("email", email,
+                "password", "Another-long-password!", "displayName", "Seller"));
+        mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isCreated());
+        mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON)
+                        .content(body.replace(email, email.toUpperCase())))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("DATA_CONFLICT"));
+    }
+
+    @ParameterizedTest
+    @WithAnonymousUser
+    @ValueSource(strings = {"unknown", "legacy", "wrongPassword", "tooManyPasswordBytes"})
+    void loginFailuresUseGeneric401(String scenario) throws Exception {
+        String email = "absent@example.com";
+        String password = "Incorrect-password!";
+        if (scenario.equals("legacy")) {
+            email = "seller@marketplace.test";
+        }
+        if (scenario.equals("tooManyPasswordBytes")) {
+            password = "é".repeat(50);
+        }
+        if (scenario.equals("wrongPassword")) {
+            email = "wrong-password-" + java.util.UUID.randomUUID() + "@example.com";
+            var registration = objectMapper.writeValueAsString(java.util.Map.of("email", email,
+                    "password", "Correct-password-2026!", "displayName", "Seller"));
+            mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(registration))
+                    .andExpect(status().isCreated());
+        }
+        var body = objectMapper.writeValueAsString(java.util.Map.of("email", email, "password", password));
+        mvc.perform(post("/api/v1/auth/login").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.code").value("UNAUTHENTICATED"))
+                .andExpect(jsonPath("$.detail").value("Invalid credentials or authentication required"));
+    }
+
+    @ParameterizedTest
+    @WithAnonymousUser
+    @ValueSource(strings = {"invalidEmail", "shortPassword", "unicodePassword", "blankName", "extraRole"})
+    void invalidRegistrationDoesNotCreateAnAccount(String scenario) throws Exception {
+        String email = "invalid-" + java.util.UUID.randomUUID() + "@example.com";
+        var body = objectMapper.createObjectNode().put("email", email).put("password", "A-valid-password-2026!")
+                .put("displayName", "Seller");
+        switch (scenario) {
+            case "invalidEmail" -> body.put("email", "not-an-email");
+            case "shortPassword" -> body.put("password", "short");
+            case "unicodePassword" -> body.put("password", "é".repeat(50));
+            case "blankName" -> body.put("displayName", " ");
+            case "extraRole" -> body.put("role", "ADMIN");
+            default -> throw new IllegalArgumentException(scenario);
+        }
+        int count = dsl.fetchCount(USERS);
+        mvc.perform(post("/api/v1/auth/register").with(csrf()).contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+                .andExpect(status().isBadRequest());
+        assertThat(dsl.fetchCount(USERS)).isEqualTo(count);
+    }
+
+    @Test
+    @WithAnonymousUser
+    void tokensCannotBeReusedInAnotherSession() throws Exception {
+        var response = mvc.perform(get("/api/v1/auth/csrf")).andExpect(status().isOk()).andReturn();
+        var token = objectMapper.readTree(response.getResponse().getContentAsString());
+        mvc.perform(post("/api/v1/auth/login").session(new MockHttpSession())
+                        .header(token.get("headerName").asText(), token.get("token").asText())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"email\":\"user@example.com\",\"password\":\"password\"}"))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("INVALID_CSRF_TOKEN"));
     }
 }

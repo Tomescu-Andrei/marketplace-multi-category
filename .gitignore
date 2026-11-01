@@ -19,3 +19,6 @@
 # Operating systems
 .DS_Store
 Thumbs.db
+
+# Disposable clean-clone verification copies
+.verification/

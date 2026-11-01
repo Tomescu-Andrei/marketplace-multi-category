@@ -8,9 +8,13 @@ The default local profile also runs V3 from `db/local`, adding the predefined
 M1 seller. Future shared migrations must use version V4 or higher because V3
 is reserved for the local seed. Applied migrations must not be edited.
 
-The Maven generation script starts a temporary PostgreSQL 17 container, runs the
-shared Flyway migrations and invokes jOOQ's generator against the migrated schema.
-The temporary container is stopped in a finally block. Build and test containers
+M2's V4 adds nullable users.password_hash and a lower(email) unique index. Existing
+M1 users cannot log in because their hash is null; new registration stores BCrypt.
+
+Native builds use a temporary PostgreSQL container; Docker image builds supply an
+isolated PostgreSQL process inside the build stage. Both run shared Flyway migrations
+and generate jOOQ from the migrated schema. Finally blocks/shell traps stop temporary
+resources. Build and test containers
 use random host ports and do not depend on the Compose development database.
 The code generator and runtime use the same Spring Boot-managed jOOQ version.
 
@@ -19,7 +23,7 @@ The code generator and runtime use the same Spring Boot-managed jOOQ version.
 - `categories`: identity, name, unique slug and optional self-referencing parent.
 - `category_attributes`: per-category codes with TEXT, NUMBER or BOOLEAN types and
   a required flag; each category/code pair is unique.
-- `users`: seller identity and creation timestamp. No authentication yet.
+- `users`: seller identity, timestamp and nullable legacy/BCrypt password hash.
 - `listings`: seller/category foreign keys, descriptive fields, type, money,
   currency, status, attributes and timestamps.
 
@@ -55,12 +59,12 @@ Controllers receive validated request DTOs and return response DTOs. Services
 own business rules and transaction boundaries. Repositories use DSLContext and
 generated jOOQ tables/records internally; generated records are never returned
 directly by REST controllers. Creation validates the category, its attributes and
-the predefined seller in a single Spring transaction before inserting a listing.
+the authenticated seller in a single Spring transaction before inserting a listing.
 
 ## Deferred behavior
 
 AUCTION is currently a listing type only. Auctions, bids, images, favorites,
 messages, notifications and valuation tables will be added by future migrations
-when their behavior is implemented. Authentication, frontend, payments and
-Google Cloud deployment are outside this increment. The local seller is an M1
-convenience and must be replaced when authentication is implemented.
+when their behavior is implemented. Frontend, payments and cloud deployment remain
+future work. M2 authentication supplies new listing sellers; the M1 seller remains
+as legacy data.

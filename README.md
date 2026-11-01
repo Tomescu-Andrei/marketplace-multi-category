@@ -1,152 +1,103 @@
 # marketplace-multi-category
 
-Multi-category marketplace developed for the Research Industry Projects course.
+Multi-category marketplace for the Research Industry Projects course.
+M1 is verified. M2 begins with registration, session login/logout and authenticated
+listing creation. React, listing editing/deletion and filtering remain next.
 
-## Current status
+## Run everything in Docker
 
-Java 21, Spring Boot, Maven, Spring Web, Validation, Flyway, jOOQ and PostgreSQL.
-The database runs locally in Docker; the backend runs on the host machine.
-
-The category/listing APIs, validation, consistent errors and Swagger UI are implemented.
-M1 architecture and research proposal are documented. No frontend is implemented.
-
-## Run locally
-
-Requirements: JDK 21, Maven 3.9 or newer, and Docker Desktop running with Linux containers.
-
-From the repository root:
+Requirements: Docker Desktop with Linux containers and Compose v2. No host Java,
+Maven or Python is needed. From the repository root:
 
 ```powershell
-docker compose up -d --wait
-cd backend
-mvn spring-boot:run
+docker compose up -d --build --wait
 ```
 
-The server listens on `http://localhost:8080`. API endpoints are under `/api/v1`;
-a 404 response at `/` is expected. Stop the application with Ctrl+C.
+- [Swagger UI](http://localhost:8081/swagger-ui.html)
+- [OpenAPI JSON](http://localhost:8081/v3/api-docs)
+- [Health](http://localhost:8081/actuator/health)
+- PostgreSQL: `localhost:15432`, database/user `marketplace`, local password `marketplace_local`.
 
-If another project uses port 8080, set `$env:SERVER_PORT = "8081"` before
-starting the backend, then use `http://localhost:8081`.
-
-PostgreSQL is available at `localhost:15432`, database `marketplace`, username
-`marketplace`, password `marketplace_local` (local development only).
-The host port is 15432 to avoid conflicts with other local PostgreSQL instances;
-inside the container PostgreSQL uses port 5432.
-Flyway automatically creates the schema on first application startup and applies
-new migrations on subsequent starts. The default `local` profile also creates an
-M1 test seller. When selecting a different profile, configure a seller explicitly;
-authentication and production deployment remain out of scope.
-
-From the repository root, inspect or stop the database:
+Backend and database communicate through `postgres:5432` internally. PostgreSQL
+keeps its data in a named volume. Flyway migrates automatically at startup. The
+backend runs as a non-root user and has a database-aware health check.
 
 ```powershell
 docker compose ps
-docker compose exec postgres psql -U marketplace -d marketplace -c "SELECT current_database();"
+docker compose logs --tail 100 backend
+docker compose exec postgres psql -U marketplace -d marketplace -c "\dt"
 docker compose down
 ```
 
-Data persists in a named Docker volume when the container is stopped or recreated.
+Stopping/recreating containers preserves data. Rebuild after code changes.
+Optionally copy `.env.example` to `.env` to override `BACKEND_PORT`, `POSTGRES_PORT`
+and `DB_PASSWORD`. A changed variable does not change an existing database user's password.
 
-## Database configuration
-
-The backend reads `DB_URL`, `DB_USERNAME` and `DB_PASSWORD` from its environment.
-Defaults match the local Docker container. For example, in PowerShell:
-
-```powershell
-$env:DB_URL = "jdbc:postgresql://localhost:15432/marketplace"
-$env:DB_USERNAME = "marketplace"
-$env:DB_PASSWORD = "marketplace_local"
-```
-
-Compose also reads `DB_PASSWORD` from the shell environment. Set it before
-starting both Compose and the backend when using a different local password.
-PostgreSQL initialization settings apply only when its data volume is empty;
-changing the variable does not change an existing database user's password.
-
-The production database is planned for Google Cloud SQL. Its connection URL and
-credentials will be supplied through environment variables and Secret Manager.
-Cloud SQL connectivity and deployment will be configured in a later milestone.
-
-## Verify and package
-
-From `backend/`:
+## Tests and repeatable demonstration
 
 ```powershell
-mvn clean verify
-java -jar target/marketplace-backend-0.0.1-SNAPSHOT.jar
+docker compose --profile tools run --build --rm verify
+docker compose --profile tools run --rm demo
 ```
 
-Docker must be running for compilation and tests. During Maven's `generate-sources`
-phase, a temporary PostgreSQL container is migrated with Flyway and jOOQ generates
-Java classes in `target/generated-sources/jooq`, package `com.marketplace.jooq`.
-Maven adds this folder to compilation automatically. Generate alone with
-`mvn generate-sources`; never edit generated files or commit `target/`.
+`verify` performs a clean Maven build and PostgreSQL integration tests inside Docker.
+It uses the Docker socket for disposable Testcontainers instances. Reports and
+generated files appear in ignored `backend/target/`. The Maven cache uses a named
+volume. `host.docker.internal` connects the verifier to mapped test ports.
 
-API integration tests use another isolated PostgreSQL container. They verify
-migrations, category retrieval, listing creation and retrieval, pagination,
-invalid requests, error contracts and Swagger. Builds and tests do not change the
-development database. See [testing and demo](docs/testing.md) for coverage and troubleshooting.
+`demo` checks Swagger, health, registration/login, listing creation and retrieval,
+validation errors and logout over real HTTP. **It leaves a demo account and listing
+in the development database.** Each run uses a unique email.
 
-In IntelliJ, import `backend/pom.xml`, select JDK 21, run `mvn generate-sources`
-with Docker running, then reload the Maven project if generated types are unresolved.
+The application image build uses its own temporary PostgreSQL inside the build stage
+for Flyway/jOOQ generation, without a Docker socket or external database. It packages
+with tests skipped; run `verify` separately. Only the resulting JAR is copied into
+the JRE runtime, which contains no Maven or PostgreSQL and has no Docker socket.
 
-## REST API
+## Swagger authentication flow
 
-| Method | Path | Result |
-|---|---|---|
-| GET | `/api/v1/categories` | Seeded categories |
-| GET | `/api/v1/categories/{id}` | Category and attribute definitions |
-| GET | `/api/v1/listings?limit=20&offset=0` | Listings, newest first |
-| GET | `/api/v1/listings/{id}` | Listing details |
-| POST | `/api/v1/listings` | Create a listing; returns 201 and a Location header |
+Public category/listing GETs need no login. For creating listings:
 
-Listing pagination accepts a limit from 1 to 100 and a nonnegative offset.
-Missing resources return 404. Invalid input returns 400 using Problem Detail JSON.
-An unknown category during creation returns 404. Errors include a stable `code`
-and an `errors` array of field/message pairs; see [API errors](docs/api-errors.md).
+1. GET `/api/v1/auth/csrf` and copy the returned token.
+2. POST `/api/v1/auth/register` using that token in `X-CSRF-TOKEN`, your email,
+   displayName and a password of 12+ characters, at most 72 UTF-8 bytes.
+3. POST `/api/v1/auth/login` using the same token and your credentials.
+4. GET `/api/v1/auth/csrf` again: login rotates the session and invalidates the old token.
+5. POST `/api/v1/listings` with the renewed token and the supplied request example.
+6. GET `/api/v1/auth/me` shows the account. POST `/api/v1/auth/logout` with the current token ends the session.
 
-Example in PowerShell (change the port if using `SERVER_PORT`):
+The browser manages the HttpOnly session cookie. Registration does not log in
+automatically. Legacy M1 seed users have no password and cannot log in.
+New listing sellers come from the authenticated account, never from client input.
+See [authentication](docs/authentication.md) for the full contract.
 
-```powershell
-$baseUrl = "http://localhost:8080"
-Invoke-RestMethod "$baseUrl/api/v1/categories"
-Invoke-RestMethod "$baseUrl/api/v1/categories/1"
-$body = @{
-    categoryId = 1
-    title = "Used laptop"
-    description = "Working laptop"
-    listingType = "FIXED_PRICE"
-    price = 1250.50
-    currency = "RON"
-    attributes = @{ brand = "Lenovo"; year = 2022; original_packaging = $false }
-} | ConvertTo-Json
-$listing = Invoke-RestMethod "$baseUrl/api/v1/listings" -Method Post -ContentType "application/json" -Body $body
-Invoke-RestMethod "$baseUrl/api/v1/listings/$($listing.id)"
-```
+## API and optional IDE workflow
 
-The seller is supplied by the local server configuration, not by the request.
-`FIXED_PRICE` requires a positive price, with at most two decimal places.
-`AUCTION` stores listing metadata only and allows a null price; bidding and auction
-lifecycle are deferred to M3. Both types require a supported uppercase ISO currency.
-Category attribute codes, required values and JSON types are validated by the service.
+The five category/listing operations remain under `/api/v1/categories` and
+`/api/v1/listings`. Swagger describes all operations, constraints and errors.
+FIXED_PRICE requires a positive price with at most two decimal places. AUCTION
+stores metadata only; bidding belongs to M3. Errors include `code` and field details.
 
-## Swagger UI
+Native Java debugging remains available with JDK 21 and Maven 3.9+: start the database
+with `docker compose up -d postgres`, then run `mvn spring-boot:run` from `backend/`.
+Use `SERVER_PORT` if 8080 is occupied. Native datasource defaults to localhost:15432.
+Run `mvn generate-sources` with Docker running and reload `backend/pom.xml` in IntelliJ
+if generated types are unresolved. Generated files belong only in
+`backend/target/generated-sources/jooq/`, package `com.marketplace.jooq`.
 
-With the backend running, open [Swagger UI](http://localhost:8080/swagger-ui.html).
-Use **Try it out** on each operation; POST listings includes a working example.
-Adjust the URL if using a different `SERVER_PORT`. No authentication is required
-for the M1 local seller.
-
-OpenAPI JSON: [API definition](http://localhost:8080/v3/api-docs).
-YAML is also available at `/v3/api-docs.yaml`.
+The backend accepts `DB_URL`, `DB_USERNAME` and `DB_PASSWORD` for future external
+database hosting. Cloud SQL connectivity and deployment are future work. Local HTTP
+session cookies use `secure=false`; set `SESSION_COOKIE_SECURE=true` for HTTPS.
+Sessions are currently in memory and end on backend restart; shared/persistent
+session storage is needed before deploying multiple instances.
 
 ## Documentation
 
-- [Architecture](docs/architecture.md): layers, request flow and future cloud architecture.
-- [Database design](docs/database-design.md): schema decisions and JSONB trade-offs.
-- [API errors](docs/api-errors.md): validation rules and error contract.
-- [Testing and demo](docs/testing.md): verification, manual demonstration and troubleshooting.
-- [Research proposal](docs/research-proposal.md): dataset requirements, experiments,
-  MAE/RMSE/R² evaluation and planned Java model integration. No experiments have run yet.
-
-See [AGENTS.md](AGENTS.md) for the architecture and milestone requirements.
+- [Architecture](docs/architecture.md)
+- [Database design](docs/database-design.md)
+- [Authentication](docs/authentication.md)
+- [API errors](docs/api-errors.md)
+- [Testing and demo](docs/testing.md)
+- [M1 verification report](docs/m1-verification.md)
+- [Research proposal](docs/research-proposal.md): planned experiments; no trained model or results yet.
+- [Instructions and milestones](AGENTS.md)

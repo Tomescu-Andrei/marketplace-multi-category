@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: marketplace
       POSTGRES_PASSWORD: ${DB_PASSWORD:-marketplace_local}
     ports:
-      - "127.0.0.1:15432:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,5 +18,59 @@ services:
       retries: 12
       start_period: 10s
 
+  backend:
+    image: ${COMPOSE_PROJECT_NAME:-marketplace}-backend:local
+    build:
+      context: ./backend
+      target: runtime
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/marketplace
+      DB_USERNAME: marketplace
+      DB_PASSWORD: ${DB_PASSWORD:-marketplace_local}
+      SERVER_PORT: 8080
+      SPRING_PROFILES_ACTIVE: local
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    ports:
+      - "127.0.0.1:${BACKEND_PORT:-8081}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/actuator/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 30s
+
+  verify:
+    profiles: [tools]
+    build:
+      context: ./backend
+      target: toolchain
+    working_dir: /workspace
+    command: ["mvn", "-B", "clean", "verify"]
+    environment:
+      DOCKER_HOST: unix:///var/run/docker.sock
+      TESTCONTAINERS_HOST_OVERRIDE: host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend:/workspace
+      - maven_cache:/root/.m2
+      - /var/run/docker.sock:/var/run/docker.sock
+
+  demo:
+    profiles: [tools]
+    image: python:3.13-alpine
+    command: ["python", "-u", "/checks/demo.py"]
+    environment:
+      DEMO_BASE_URL: http://backend:8080
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/checks:ro
+
 volumes:
   postgres_data:
+  maven_cache:

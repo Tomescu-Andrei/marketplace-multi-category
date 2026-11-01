@@ -17,7 +17,6 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.marketplace.jooq.Tables.LISTINGS;
-import static com.marketplace.jooq.Tables.USERS;
 
 @Repository
 public class ListingRepository {
@@ -27,10 +26,6 @@ public class ListingRepository {
     public ListingRepository(DSLContext dsl, ObjectMapper objectMapper) {
         this.dsl = dsl;
         this.objectMapper = objectMapper;
-    }
-
-    public boolean sellerExists(long id) {
-        return dsl.fetchExists(dsl.selectFrom(USERS).where(USERS.ID.eq(id)));
     }
 
     public List<ListingResponse> findAll(int limit, int offset) {

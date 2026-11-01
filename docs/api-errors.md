@@ -33,6 +33,9 @@ this handler's scope.
 | 400 | `INVALID_JSON` | Malformed JSON, wrong field type, unknown field, duplicate key, or extra trailing JSON |
 | 400 | `INVALID_PARAMETER` | Invalid path ID, pagination value or parameter type |
 | 400 | `INVALID_LISTING` | Missing fixed price, unsupported currency, or invalid category attributes |
+| 401 | `UNAUTHENTICATED` | Authentication required, expired session or invalid credentials |
+| 403 | `INVALID_CSRF_TOKEN` | Missing/invalid CSRF token; fetch a token for this session |
+| 403 | `FORBIDDEN` | Operation not permitted |
 | 404 | `NOT_FOUND` | Category, listing or route does not exist |
 | 405 | `METHOD_NOT_ALLOWED` | Unsupported HTTP method; `Allow` header is preserved |
 | 406 | `NOT_ACCEPTABLE` | Response cannot satisfy the requested representation |
@@ -55,8 +58,13 @@ this handler's scope.
 - Fractional category IDs, unknown request fields (including `sellerId`), duplicate
   JSON object keys and multiple concatenated JSON documents are rejected.
 
-The predefined seller is controlled by the server; clients cannot select a seller,
+The seller is the authenticated account; clients cannot select a different seller,
 status, ID or timestamps in the create request. Valid title/description strings
 are stripped of leading/trailing whitespace before persistence.
 
 Reference: [Spring Framework error responses](https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-ann-rest-exceptions.html).
+
+M2's security filters also use this error shape. A missing CSRF token may produce
+403 before authentication or DTO validation. Unknown routes require authentication
+unless explicitly public, so anonymous calls can receive 401 before MVC routing.
+See [authentication](authentication.md) for registration and session rules.
